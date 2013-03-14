@@ -3,7 +3,7 @@ import sublime_plugin
 import os
 import re
 import xml.etree.ElementTree as etree
-import StringIO
+import io
 
 EXT_SANESNIPPET  = ".sane-snippet"
 EXT_SNIPPET_SANE = ".sane.sublime-snippet"
@@ -16,28 +16,6 @@ template      = re.compile(r'''
                            ''' % dict(nl=r'(?:\r\n?|\n)', nnl=r'(?P<linesep>\r\n?|\n)'),
                            re.S | re.X)
 line_template = re.compile(r'^(?P<key>.*?):\s*(?P<val>.*)$')
-
-
-class ElementTreeCDATA(etree.ElementTree):
-    """Subclass of ElementTree which handles CDATA blocks reasonably"""
-
-    def __init__(self, elem, linesep='\n', *args, **kwargs):
-        etree.ElementTree.__init__(self, elem, *args, **kwargs)
-        self.linesep = linesep
-
-    def _write(self, f, node, encoding, namespaces):
-        """This method is for ElementTree <= 1.2.6"""
-
-        if node.tag == '![CDATA[':
-            text = node.text.encode(encoding)
-            # escape ']]>' sequences by wrapping them into two CDATA sections
-            # http://stackoverflow.com/questions/223652
-            text = text.replace(']]>', ']]]]><![CDATA[>')
-            # Windows seems to replace '\r\n' by '\n' when parsing the regexp (but using only '\n' in the regexp will fail).
-            # Also, Windows replaces any '\n' write-time by '\r\n'. '\r' works as it should.
-            f.write("%(ls)s<![CDATA[%(text)s]]>%(ls)s" % dict(text=text, ls=self.linesep))
-        else:
-            etree.ElementTree._write(self, f, node, encoding, namespaces)
 
 
 def xml_append_node(s, tag, text, **kwargs):
@@ -56,7 +34,15 @@ def snippet_to_xml(snippet):
     for key in ['description', 'tabTrigger', 'scope']:
         xml_append_node(s, key, snippet[key])
 
-    s.append(xml_append_node(etree.Element('content'), '![CDATA[', snippet['content']))
+    # This used to modify ElementTree to handle CDATA as a node, but that code
+    # wasn't reliable between different ElementTree versions. This just
+    # lets etree do normal XML escaping, making the XML file harder to read,
+    # but you should be reading the the sane version anyway. 
+    # TODO: Any funcitonal differences doing this?
+    content = etree.Element('content')
+    content.text = snippet['content']
+    s.append(content)
+
     return s
 
 
@@ -107,7 +93,7 @@ def regenerate_snippet(path, onload=False):
     try:
         f = open(path, 'r')
     except:
-        print "SaneSnippet: Unable to read `%s`" % path
+        print("SaneSnippet: Unable to read `%s`" % path)
         return None
     else:
         read = f.read()
@@ -120,23 +106,25 @@ def regenerate_snippet(path, onload=False):
         msg += " in file `%s`" % path
         if onload:
             # Sublime Text likes "hanging" itself when an error_message is pushed at initialization
-            print "Error: " + msg
+            print("Error: " + msg)
         else:
             sublime.error_message(msg)
         if not isinstance(e, SyntaxError):
-            print e  # print the error only if it's not raised intentionally
+            print(e)  # print the error only if it's not raised intentionally
 
         return None
 
-    sio = StringIO.StringIO()
+    sio = io.BytesIO()
     try:
         # TODO: Prettify the XML structure before writing
-        ElementTreeCDATA(snippet_to_xml(snippet), linesep=snippet['linesep']).write(sio)
-    except:
-        print "SaneSnippet: Could not write XML data into stream for file `%s`" % path
+        etree.ElementTree(snippet_to_xml(snippet)).write(sio)
+    except Exception as e:
+        print("SaneSnippet: Could not write XML data into stream for file `%s`" % path)
         return None
     else:
-        return sio.getvalue()
+        s = sio.getvalue().decode('utf-8')
+
+        return s
     finally:
         sio.close()
 
@@ -157,7 +145,7 @@ def regenerate_snippets(root=sublime.packages_path(), onload=False, force=False)
                     try:
                         os.remove(path)
                     except:
-                        print "SaneSnippet: Unable to delete `%s`, file is probably in use" % path
+                        print("SaneSnippet: Unable to delete `%s`, file is probably in use" % path)
 
                 continue
 
@@ -177,7 +165,7 @@ def regenerate_snippets(root=sublime.packages_path(), onload=False, force=False)
                     try:
                         f = open(path, 'r')
                     except:
-                        print "SaneSnippet: Unable to read `%s`" % path
+                        print("SaneSnippet: Unable to read `%s`" % path)
                         continue
                     else:
                         read = f.read()
@@ -191,7 +179,7 @@ def regenerate_snippets(root=sublime.packages_path(), onload=False, force=False)
                     try:
                         f = open(path, 'w')
                     except:
-                        print "SaneSnippet: Unable to open `%s`" % path
+                        print("SaneSnippet: Unable to open `%s`" % path)
                         continue
                     else:
                         read = f.write(generated)
